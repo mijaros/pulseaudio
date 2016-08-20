@@ -59,6 +59,7 @@ struct transport_rfcomm {
 #define BLUEZ_PROFILE_INTERFACE BLUEZ_SERVICE ".Profile1"
 
 #define HSP_AG_PROFILE "/Profile/HSPAGProfile"
+#define HFP_AG_PROFILE "/Profile/HFPAGProfile"
 
 #define PROFILE_INTROSPECT_XML                                          \
     DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE                           \
@@ -324,6 +325,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
     DBusMessageIter arg_i;
     char *pathfd;
     struct transport_rfcomm *trfc;
+    bool is_hfp;
 
     if (!dbus_message_iter_init(m, &arg_i) || !pa_streq(dbus_message_get_signature(m), "oha{sv}")) {
         pa_log_error("Invalid signature found in NewConnection");
@@ -331,7 +333,13 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
     }
 
     handler = dbus_message_get_path(m);
-    pa_assert(pa_streq(handler, HSP_AG_PROFILE));
+
+    if (pa_streq(handler, HFP_AG_PROFILE))
+        is_hfp = true;
+    else if (pa_streq(handler, HSP_AG_PROFILE))
+        is_hfp = false;
+    else
+        pa_assert_not_reached();
 
     pa_assert(dbus_message_iter_get_arg_type(&arg_i) == DBUS_TYPE_OBJECT_PATH);
     dbus_message_iter_get_basic(&arg_i, &path);
@@ -351,7 +359,11 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
 
     sender = dbus_message_get_sender(m);
 
-    p = PA_BLUETOOTH_PROFILE_HSP_HS;
+    if (is_hfp)
+        p = PA_BLUETOOTH_PROFILE_HFP_HF;
+    else
+        p = PA_BLUETOOTH_PROFILE_HSP_HS;
+
     pathfd = pa_sprintf_malloc ("%s/fd%d", path, fd);
     t = pa_bluetooth_transport_new(d, sender, pathfd, p, NULL, 0);
     pa_xfree(pathfd);
@@ -403,7 +415,8 @@ static DBusHandlerResult profile_handler(DBusConnection *c, DBusMessage *m, void
 
     pa_log_debug("dbus: path=%s, interface=%s, member=%s", path, interface, member);
 
-    if (!pa_streq(path, HSP_AG_PROFILE))
+    if (!pa_streq(path, HSP_AG_PROFILE)
+        && !pa_streq(path, HFP_AG_PROFILE))
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 
     if (dbus_message_is_method_call(m, "org.freedesktop.DBus.Introspectable", "Introspect")) {
@@ -442,6 +455,10 @@ static void profile_init(pa_bluetooth_backend *b, pa_bluetooth_profile_t profile
             object_name = HSP_AG_PROFILE;
             uuid = PA_BLUETOOTH_UUID_HSP_AG;
             break;
+        case PA_BLUETOOTH_PROFILE_HFP_HF:
+            object_name = HFP_AG_PROFILE;
+            uuid = PA_BLUETOOTH_UUID_HFP_AG;
+            break;
         default:
             pa_assert_not_reached();
             break;
@@ -457,6 +474,9 @@ static void profile_done(pa_bluetooth_backend *b, pa_bluetooth_profile_t profile
     switch (profile) {
         case PA_BLUETOOTH_PROFILE_HSP_HS:
             dbus_connection_unregister_object_path(pa_dbus_connection_get(b->connection), HSP_AG_PROFILE);
+            break;
+        case PA_BLUETOOTH_PROFILE_HFP_HF:
+            dbus_connection_unregister_object_path(pa_dbus_connection_get(b->connection), HFP_AG_PROFILE);
             break;
         default:
             pa_assert_not_reached();
@@ -484,6 +504,8 @@ pa_bluetooth_backend *pa_bluetooth_native_backend_new(pa_core *c, pa_bluetooth_d
     backend->discovery = y;
 
     profile_init(backend, PA_BLUETOOTH_PROFILE_HSP_HS);
+    if (!disable_profile_hfp)
+        profile_init(backend, PA_BLUETOOTH_PROFILE_HFP_HF);
 
     return backend;
 }
@@ -494,6 +516,7 @@ void pa_bluetooth_native_backend_free(pa_bluetooth_backend *backend) {
     pa_dbus_free_pending_list(&backend->pending);
 
     profile_done(backend, PA_BLUETOOTH_PROFILE_HSP_HS);
+    profile_done(backend, PA_BLUETOOTH_PROFILE_HFP_HF);
 
     pa_dbus_connection_unref(backend->connection);
 

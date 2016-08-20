@@ -47,6 +47,7 @@ typedef enum profile {
     PA_BLUETOOTH_PROFILE_A2DP_SINK,
     PA_BLUETOOTH_PROFILE_A2DP_SOURCE,
     PA_BLUETOOTH_PROFILE_HSP_HS,
+    PA_BLUETOOTH_PROFILE_HFP_HF,
     PA_BLUETOOTH_PROFILE_HFP_AG,
     PA_BLUETOOTH_PROFILE_OFF
 } pa_bluetooth_profile_t;
@@ -116,6 +117,8 @@ struct pa_bluetooth_adapter {
 
     bool valid;
 };
+
+extern bool disable_profile_hfp; /* globally disable HFP  */
 
 #ifdef HAVE_BLUEZ_5_OFONO_HEADSET
 pa_bluetooth_backend *pa_bluetooth_ofono_backend_new(pa_core *c, pa_bluetooth_discovery *y);

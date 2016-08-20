@@ -37,11 +37,13 @@ PA_MODULE_DESCRIPTION("Detect available BlueZ 5 Bluetooth audio devices and load
 PA_MODULE_VERSION(PACKAGE_VERSION);
 PA_MODULE_LOAD_ONCE(true);
 PA_MODULE_USAGE(
-    "headset=ofono|native|auto"
+    "headset=ofono|native|auto "
+    "disable_profile_hfp=<disable registration of HFP?>"
 );
 
 static const char* const valid_modargs[] = {
     "headset",
+    "disable_profile_hfp",
     NULL
 };
 
@@ -51,6 +53,7 @@ struct userdata {
     pa_hashmap *loaded_device_paths;
     pa_hook_slot *device_connection_changed_slot;
     pa_bluetooth_discovery *discovery;
+    bool disable_profile_hfp;
 };
 
 static pa_hook_result_t device_connection_changed_cb(pa_bluetooth_discovery *y, const pa_bluetooth_device *d, struct userdata *u) {
@@ -71,7 +74,7 @@ static pa_hook_result_t device_connection_changed_cb(pa_bluetooth_discovery *y, 
     if (!module_loaded && pa_bluetooth_device_any_transport_connected(d)) {
         /* a new device has been connected */
         pa_module *m;
-        char *args = pa_sprintf_malloc("path=%s", d->path);
+        char *args = pa_sprintf_malloc("path=%s disable_profile_hfp=%s", d->path, u->disable_profile_hfp ? "true" : "false");
 
         pa_log_debug("Loading module-bluez5-device %s", args);
         m = pa_module_load(u->module->core, "module-bluez5-device", args);
@@ -125,6 +128,12 @@ int pa__init(pa_module *m) {
     u->module = m;
     u->core = m->core;
     u->loaded_device_paths = pa_hashmap_new(pa_idxset_string_hash_func, pa_idxset_string_compare_func);
+
+    u->disable_profile_hfp = false;
+    if (pa_modargs_get_value_boolean(ma, "disable_profile_hfp", &u->disable_profile_hfp) < 0) {
+        pa_log("disable_profile_hfp must be either true or false");
+        goto fail;
+    }
 
     if (!(u->discovery = pa_bluetooth_discovery_get(u->core, headset_backend)))
         goto fail;
