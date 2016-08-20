@@ -50,6 +50,45 @@ struct transport_rfcomm {
     pa_mainloop_api *mainloop;
 };
 
+struct hfp_config {
+    uint32_t capabilities;
+    int state;
+};
+
+/*
+ * the separate hansfree headset (HF) and Audio Gateway (AG) features
+ */
+enum hfp_hf_features {
+    HFP_HF_EC_NR = 0,
+    HFP_HF_CALL_WAITING = 1,
+    HFP_HF_CLI = 2,
+    HFP_HF_VR = 3,
+    HFP_HF_RVOL = 4,
+    HFP_HF_ESTATUS = 5,
+    HFP_HF_ECALL = 6,
+    HFP_HF_CODECS = 7,
+};
+
+enum hfp_ag_features {
+    HFP_AG_THREE_WAY = 0,
+    HFP_AG_EC_NR = 1,
+    HFP_AG_VR = 2,
+    HFP_AG_RING = 3,
+    HFP_AG_NUM_TAG = 4,
+    HFP_AG_REJECT = 5,
+    HFP_AG_ESTATUS = 6,
+    HFP_AG_ECALL = 7,
+    HFP_AG_EERR = 8,
+    HFP_AG_CODECS = 9,
+};
+
+/* gateway features we support */
+static uint32_t hfp_features =
+    /* LG HBS900 reboots if it doesn't see this */
+    (1 << HFP_AG_THREE_WAY) |
+    /* HFP 1.6 requires this */
+  (1 << HFP_AG_ESTATUS );
+
 #define BLUEZ_SERVICE "org.bluez"
 #define BLUEZ_MEDIA_TRANSPORT_INTERFACE BLUEZ_SERVICE ".MediaTransport1"
 
@@ -99,6 +138,27 @@ static pa_dbus_pending* send_and_add_to_pending(pa_bluetooth_backend *backend, D
     dbus_pending_call_set_notify(call, func, p, NULL);
 
     return p;
+}
+
+static void rfcomm_write(int fd, const char *str)
+{
+    size_t len;
+    char buf[512];
+
+    pa_log_debug("RFCOMM >> %s", str);
+    sprintf(buf, "\r\n%s\r\n", str);
+    len = write(fd, buf, strlen(buf));
+
+    if (len != strlen(buf))
+        pa_log_error("RFCOMM write error: %s", pa_cstrerror(errno));
+}
+
+static void hfp_send_features(int fd)
+{
+    char buf[512];
+
+    sprintf(buf, "+BRSF: %d", hfp_features);
+    rfcomm_write(fd, buf);
 }
 
 static int bluez5_sco_acquire_cb(pa_bluetooth_transport *t, bool optional, size_t *imtu, size_t *omtu) {
@@ -216,6 +276,58 @@ static void register_profile(pa_bluetooth_backend *b, const char *profile, const
     send_and_add_to_pending(b, m, register_profile_reply, pa_xstrdup(profile));
 }
 
+static void transport_put(pa_bluetooth_transport *t)
+{
+    pa_bluetooth_transport_put(t);
+
+    pa_log_debug("Transport %s available for profile %s", t->path, pa_bluetooth_profile_to_string(t->profile));
+}
+
+static int hfp_rfcomm_handle(int fd, pa_bluetooth_transport *t, const char *buf)
+{
+    struct hfp_config *c = t->config;
+    int val;
+
+    /* stateful negotiation */
+    if (c->state == 0 && sscanf(buf, "AT+BRSF=%d", &val) == 1) {
+	  c->capabilities = val;
+	  pa_log_info("HFP capabilities returns 0x%x", val);
+	  hfp_send_features(fd);
+	  c->state = 1;
+	  return 0;
+    } else if (c->state == 1 && pa_strcont("AT+CIND=?", buf)) {
+	  /* we declare minimal indicators */
+	rfcomm_write(fd, "+CIND: (\"call\",(0,1))");
+	c->state = 2;
+	return 0;
+    } else if (c->state == 2 && pa_strcont("AT+CIND?", buf)) {
+	rfcomm_write(fd, "+CIND: 0");
+	c->state = 3;
+	return 0;
+    } else if (c->state == 3 && pa_strcont("AT+CMER=", buf)) {
+	rfcomm_write(fd, "OK");
+	c->state = 4;
+	transport_put(t);
+	return 1;
+    }
+
+
+    if (c->state != 4)
+	goto error;
+
+    /* misc things to handle in fully connected state */
+
+    if (pa_strcont("AT+BTRH?", buf)) {
+	return 0;
+    } else if (pa_strcont("AT+CHLD=?", buf)) {
+	return 0;
+    }
+
+ error:
+    rfcomm_write(fd, "ERROR");
+    return 1;
+}
+
 static void rfcomm_io_callback(pa_mainloop_api *io, pa_io_event *e, int fd, pa_io_event_flags_t events, void *userdata) {
     pa_bluetooth_transport *t = userdata;
 
@@ -246,16 +358,18 @@ static void rfcomm_io_callback(pa_mainloop_api *io, pa_io_event *e, int fd, pa_i
         } else if (sscanf(buf, "AT+VGM=%d", &gain) == 1) {
           t->microphone_gain = gain;
           pa_hook_fire(pa_bluetooth_discovery_hook(t->device->discovery, PA_BLUETOOTH_HOOK_TRANSPORT_MICROPHONE_GAIN_CHANGED), t);
-        }
-
-        pa_log_debug("RFCOMM >> OK");
-
-        len = write(fd, "\r\nOK\r\n", 6);
+        } else if (t->config) {
+	    switch (hfp_rfcomm_handle(fd, t, buf)) {
+	    case -1:
+		goto fail;
+	    case 1:
+		return;
+	    }
+	}
+	rfcomm_write(fd, "OK");
 
         /* we ignore any errors, it's not critical and real errors should
          * be caught with the HANGUP and ERROR events handled above */
-        if (len < 0)
-            pa_log_error("RFCOMM write error: %s", pa_cstrerror(errno));
     }
 
     return;
@@ -365,7 +479,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
         p = PA_BLUETOOTH_PROFILE_HSP_HS;
 
     pathfd = pa_sprintf_malloc ("%s/fd%d", path, fd);
-    t = pa_bluetooth_transport_new(d, sender, pathfd, p, NULL, 0);
+    t = pa_bluetooth_transport_new(d, sender, pathfd, p, NULL, is_hfp ? sizeof(struct hfp_config) : 0);
     pa_xfree(pathfd);
 
     t->acquire = bluez5_sco_acquire_cb;
@@ -381,9 +495,14 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
         rfcomm_io_callback, t);
     t->userdata =  trfc;
 
-    pa_bluetooth_transport_put(t);
+    if (!is_hfp)
+	transport_put(t);
+    else {
+	pa_log_debug("beginning sleep");
+	sleep(1);
+	pa_log_debug("ending sleep");
+    }
 
-    pa_log_debug("Transport %s available for profile %s", t->path, pa_bluetooth_profile_to_string(t->profile));
 
     pa_assert_se(r = dbus_message_new_method_return(m));
 
