@@ -351,7 +351,7 @@ static DBusMessage *profile_new_connection(DBusConnection *conn, DBusMessage *m,
 
     sender = dbus_message_get_sender(m);
 
-    p = PA_BLUETOOTH_PROFILE_HEADSET_HEAD_UNIT;
+    p = PA_BLUETOOTH_PROFILE_HSP_HS;
     pathfd = pa_sprintf_malloc ("%s/fd%d", path, fd);
     t = pa_bluetooth_transport_new(d, sender, pathfd, p, NULL, 0);
     pa_xfree(pathfd);
@@ -438,7 +438,7 @@ static void profile_init(pa_bluetooth_backend *b, pa_bluetooth_profile_t profile
     pa_assert(b);
 
     switch (profile) {
-        case PA_BLUETOOTH_PROFILE_HEADSET_HEAD_UNIT:
+        case PA_BLUETOOTH_PROFILE_HSP_HS:
             object_name = HSP_AG_PROFILE;
             uuid = PA_BLUETOOTH_UUID_HSP_AG;
             break;
@@ -455,7 +455,7 @@ static void profile_done(pa_bluetooth_backend *b, pa_bluetooth_profile_t profile
     pa_assert(b);
 
     switch (profile) {
-        case PA_BLUETOOTH_PROFILE_HEADSET_HEAD_UNIT:
+        case PA_BLUETOOTH_PROFILE_HSP_HS:
             dbus_connection_unregister_object_path(pa_dbus_connection_get(b->connection), HSP_AG_PROFILE);
             break;
         default:
@@ -483,7 +483,7 @@ pa_bluetooth_backend *pa_bluetooth_native_backend_new(pa_core *c, pa_bluetooth_d
 
     backend->discovery = y;
 
-    profile_init(backend, PA_BLUETOOTH_PROFILE_HEADSET_HEAD_UNIT);
+    profile_init(backend, PA_BLUETOOTH_PROFILE_HSP_HS);
 
     return backend;
 }
@@ -493,7 +493,7 @@ void pa_bluetooth_native_backend_free(pa_bluetooth_backend *backend) {
 
     pa_dbus_free_pending_list(&backend->pending);
 
-    profile_done(backend, PA_BLUETOOTH_PROFILE_HEADSET_HEAD_UNIT);
+    profile_done(backend, PA_BLUETOOTH_PROFILE_HSP_HS);
 
     pa_dbus_connection_unref(backend->connection);
 

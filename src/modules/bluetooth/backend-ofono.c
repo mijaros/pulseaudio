@@ -253,7 +253,7 @@ static void hf_audio_agent_card_found(pa_bluetooth_backend *backend, const char 
         goto fail;
     }
 
-    card->transport = pa_bluetooth_transport_new(d, backend->ofono_bus_id, path, PA_BLUETOOTH_PROFILE_HEADSET_AUDIO_GATEWAY, NULL, 0);
+    card->transport = pa_bluetooth_transport_new(d, backend->ofono_bus_id, path, PA_BLUETOOTH_PROFILE_HFP_AG, NULL, 0);
     card->transport->acquire = hf_audio_agent_transport_acquire;
     card->transport->release = hf_audio_agent_transport_release;
     card->transport->userdata = card;
